@@ -18,7 +18,9 @@ if TYPE_CHECKING:
 
 from isaaclab.sensors import ContactSensor, RayCaster
 
-
+def is_terminated(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Penalize terminated episodes that don't correspond to episodic timeouts."""
+    return env.termination_manager.terminated.float()
 
 def track_lin_vel_xy_exp(
     env: ManagerBasedRLEnv,
@@ -92,6 +94,33 @@ def flat_orientation_l2(
     reward = torch.sum(torch.square(asset.data.projected_gravity_b[:, :2]), dim=1)
     reward *= torch.clamp(-env.scene["robot"].data.projected_gravity_b[:, 2], 0, 0.7) / 0.7
     return reward
+
+def joint_pos_penalty(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    asset_cfg: SceneEntityCfg,
+    stand_still_scale: float,
+    velocity_threshold: float,
+    command_threshold: float,
+) -> torch.Tensor:
+    """Penalize joint position error from default on the articulation."""
+    # extract the used quantities (to enable type-hinting)
+    asset: Articulation = env.scene[asset_cfg.name]
+    cmd = torch.linalg.norm(env.command_manager.get_command(command_name), dim=1)
+    body_vel = torch.linalg.norm(asset.data.root_lin_vel_b[:, :2], dim=1)
+    running_reward = torch.linalg.norm(
+        (asset.data.joint_pos[:, asset_cfg.joint_ids] - asset.data.default_joint_pos[:, asset_cfg.joint_ids]), dim=1
+    )
+    reward = torch.where(
+        torch.logical_or(cmd > command_threshold, body_vel > velocity_threshold),
+        running_reward,
+        stand_still_scale * running_reward,
+    )
+    reward *= torch.clamp(-env.scene["robot"].data.projected_gravity_b[:, 2], 0, 0.7) / 0.7
+    return reward
+
+
+
 
 def upward(env: ManagerBasedRLEnv, 
         asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
