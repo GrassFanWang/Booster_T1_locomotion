@@ -159,15 +159,15 @@ BOOSTER_T1_CFG = BoosterArticulationCfg(
     },
     joint_sdk_names=[
         "Head_Yaw",
-        "Head_Pitch",
+        "Head_Pitch",                              
         "Left_Shoulder_Pitch",
         "Left_Shoulder_Roll",
-        "Left_Elbow_Yaw",
         "Left_Elbow_Pitch",
+        "Left_Elbow_Yaw",
         "Right_Shoulder_Pitch",       
         "Right_Shoulder_Roll",
-        "Right_Elbow_Yaw",
         "Right_Elbow_Pitch",
+        "Right_Elbow_Yaw",
         "Waist",
         "Left_Hip_Pitch",
         "Left_Hip_Roll",
@@ -182,5 +182,5 @@ BOOSTER_T1_CFG = BoosterArticulationCfg(
         "Right_Ankle_Pitch",
         "Right_Ankle_Roll",
     ]
-
+  
 )    

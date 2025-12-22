@@ -5,7 +5,7 @@ import numpy as np
 from pathlib import Path
 from collections import deque
 import torch
-
+import sys
 
         # "Head_Yaw",              
         # "Head_Pitch",           
@@ -29,7 +29,9 @@ import torch
         # "Right_Hip_Yaw",        
         # "Right_Knee_Pitch",      
         # "Right_Ankle_Pitch",    
-        # "Right_Ankle_Roll",      Right_Ankle_Roll        22
+        # "Right_Ankle_Roll",    
+        # 
+        #        
 
 class T1RobotSim:
     
@@ -45,19 +47,45 @@ class T1RobotSim:
             "Right_Hip_Pitch", "Right_Hip_Roll", "Right_Hip_Yaw", "Right_Knee_Pitch", "Right_Ankle_Pitch", "Right_Ankle_Roll"
         ]
         
-        # 既然顺序一致了，就不再需要 self.isaac_to_mujoco_idx 映射表
-        self.default_joint_pos = np.zeros(23)
+        self.isaac_joint_names = [
+            "Head_Yaw", "Head_Pitch",           
+            "Left_Shoulder_Pitch", "Left_Shoulder_Roll", "Left_Elbow_Yaw", "Left_Elbow_Pitch",
+            "Right_Shoulder_Pitch", "Right_Shoulder_Roll", "Right_Elbow_Yaw", "Right_Elbow_Pitch",
+            "Waist",                 
+            "Left_Hip_Pitch", "Left_Hip_Roll", "Left_Hip_Yaw", "Left_Knee_Pitch", "Left_Ankle_Pitch", "Left_Ankle_Roll",
+            "Right_Hip_Pitch", "Right_Hip_Roll", "Right_Hip_Yaw", "Right_Knee_Pitch", "Right_Ankle_Pitch", "Right_Ankle_Roll"
+        ]
+        
+        # 计算映射逻辑
+        # 我们问：Isaac 里的第 j 个关节，在 MuJoCo 列表里排第几？
+      
+
+
+        self.joint_stiffness = [   
+            4.0, 4.0,
+            4.0, 4.0, 4.0, 4.0,
+            4.0, 4.0, 4.0, 4.0,
+            50.0,
+            80., 80.0, 80., 80., 30., 30.,
+            80., 80.0, 80., 80., 30., 30.,
+        ]
+
+        self.joint_damping = [   
+            1., 1.,
+            1., 1., 1., 1.,
+            1., 1., 1., 1.,
+            1.,
+            2., 2., 2., 2., 2., 2.,
+            2., 2., 2., 2., 2., 2.,
+        ]
+        
+        self.default_joint_pos = np.zeros(23,dtype=np.float32)
+        self.target_joint_pos = np.zeros(23,dtype=np.float32)
         self.device = torch.device("cpu")
         self.load_model()
         self.reset_robot_pose()
-        self.base_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "Trunk")
-        
-      
-        self.action_netput = np.zeros(23)
-        self.action = np.zeros(23)
-        self.last_action = np.zeros(23)
+        self.action = np.zeros(23,dtype=np.float32)
         self.command = np.zeros(3)
-      
         self.scales = {
             "lin_vel": 2.0,
             "ang_vel": 0.25,
@@ -65,80 +93,59 @@ class T1RobotSim:
             "cmd": 1.0,
             "joint_pos": 1.0,
             "joint_vel": 0.05,
-            "action": 1.0,
-            "height": 1.0
+            "action": 1.0, 
         }
-        self.joint_damping = np.zeros(23)
-        self.joint_stiffness = np.zeros(23)
-        self.torque = np.zeros(23)
-
-        for i in range(23):
-            if i <= 1:
-                self.joint_stiffness[i] = 50.0
-                self.joint_damping[i] = 1.0
-            if  1 < i and i <= 9:
-                self.joint_stiffness[i] = 40.0
-                self.joint_damping[i] = 10.0
-
-            if i == 10:
-                self.joint_stiffness[i] = 200.0
-                self.joint_damping[i] = 5.0
-            
-            if 10<i and i<=14:
-                self.joint_stiffness[i] = 200.0
-                self.joint_damping[i] = 5.0
-            
-            if 14<i and i<=16:
-                self.joint_stiffness[i] = 50.0
-                self.joint_damping[i] = 1.0
-            
-            if 16<i and i<=20:
-                self.joint_stiffness[i] = 200.0
-                self.joint_damping[i] = 5.0
-                
-            if 20<i and i<=22:
-                self.joint_stiffness[i] = 50.0
-                self.joint_damping[i] = 1.0
-
-        
-        self.obs_history_len = 1
-        self.obs_dim_single = 81 # 单帧维度
-        # 初始化队列，自动把旧数据挤出去
-        self.obs_history = deque(maxlen=self.obs_history_len)
-        # 先填充零数据
-        for _ in range(self.obs_history_len):
-            self.obs_history.append(np.zeros(self.obs_dim_single))
-
+        self.torque = np.zeros(23,dtype=np.float32)
         self.load_policy(self.policy_path)
+        self.obs = np.zeros(81, dtype=np.float32)
 
-    def load_policy(self, path):
-        print(f"Loading JIT policy from: {path}")
-        self.policy = torch.jit.load(path, map_location=self.device)
-        self.policy.eval()
-
-
-
-    def get_project_root(self):
+        mujoco_joint_names = [self.model.joint(i).name for i in range(self.model.njnt) 
+            if self.model.joint(i).name != "world_joint"]
         
+        self.mu_to_is_indices = np.array([mujoco_joint_names.index(name) for name in self.isaac_joint_names])
+
+        # 我们问：MuJoCo 里的第 i 个关节，在 Isaac 列表里排第几？
+        self.is_to_mu_indices = np.array([self.isaac_joint_names.index(name) for name in mujoco_joint_names])
+        print(mujoco_joint_names)
+        print(self.isaac_joint_names)
+        self.default_joint_pos_is = self.default_joint_pos[self.is_to_mu_indices]
+
+        # 假设 ground 的 geom id 是 0
+        geom_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "ground")
+
+        # 修改滑动摩擦力为 0.1 (非常滑)
+        self.model.geom_friction[geom_id][0] = 1.0
+    
+    def get_project_root(self):
         current = Path(__file__).resolve().parent
         for parent in [current] + list(current.parents):
             if (parent / '.git').exists():
                 return parent
         return current
+
+
+    def load_policy(self, path):
+        print(f"Loading JIT policy from: {path}")
+        self.policy = torch.jit.load(path)
+
     
     def load_model(self):
          
         ROOT_DIR = self.get_project_root()
         MODEL_PATH = (ROOT_DIR / "T1_usd" / "T1_23dof.xml").as_posix() 
         self.policy_path = (ROOT_DIR / "logs" / "rsl_rl" / "2025-12-20_15-15-38" / "exported" / "policy.pt")
+        
         self.model = mujoco.MjModel.from_xml_path(MODEL_PATH)
+        
         self.data = mujoco.MjData(self.model)
+        self.model.opt.gravity[:] = [0, 0, 0]
+        
         print(f"成功加载模型: {MODEL_PATH}")
 
-
+    
 
     def get_actuator_index(self, actuator_name):
-        """获取执行器索引"""
+        
         return mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
          
 
@@ -180,87 +187,93 @@ class T1RobotSim:
                     self.data.joint(joint_name).qpos = angle
                 except Exception as e:
                     print(f"警告: 无法设置关节 {joint_name} - {e}")
-            
-        print(self.data.qpos)
-        mujoco.mj_forward(self.model, self.data)
-     
-    def get_rotation_matrix(self):
-        """获取基座到世界的旋转矩阵 R_world_base"""
-        # 假设 body 1 是躯干 (需根据你的 XML 确认 id)
-        # data.xmat 是 flattened 3x3 array
-        # 使用 sensor 数据更稳健，或者直接取 body xmat
-        return self.data.xmat[1].reshape(3, 3)
+        
+        self.target_joint_pos = self.default_joint_pos.copy()
+        
+        print(self.default_joint_pos)
     
-    def compute_obs(self,command,action_net_output):
+    def get_gravity_orientation(self,quat):
+        qw = quat[0]
+        qx = quat[1]
+        qy = quat[2]
+        qz = quat[3]
+
+        gravity_orientation = np.zeros(3)
+
+        gravity_orientation[0] = 2 * (-qz * qx + qw * qy)
+        gravity_orientation[1] = -2 * (qz * qy + qw * qx)
+        gravity_orientation[2] = 1 - 2 * (qw * qw + qz * qz)
+
+        return gravity_orientation
+    
+    def compute_obs(self,command):
         
+        q_mu = self.data.qpos[7:].astype(np.float32)
+        dq_mu = self.data.qvel[6:].astype(np.float32)
         
-        qpos = self.data.qpos
-        qvel = self.data.qvel
-        R = self.get_rotation_matrix()
-        R_inv = R.T
+        q_is = q_mu[self.mu_to_is_indices]
+        dq_is = dq_mu[self.mu_to_is_indices]
+    
+        base_lin_vel =  0
+        base_ang_vel = self.data.sensor("angular-velocity").data.astype(np.float32) * self.scales["ang_vel"] 
         
-        v_world = qvel[0:3]
-        base_lin_vel = R_inv @ v_world * self.scales["lin_vel"] 
-        base_ang_vel = self.data.sensor("angular-velocity").data * self.scales["ang_vel"] 
-        
-        gravity_vec = np.array([0, 0, -1])
-        projected_gravity = R_inv @ gravity_vec * self.scales["gravity"] 
-         
+        quat = self.data.sensor("orientation").data.astype(np.float32)
+        #gravity_vec = np.array([0, 0, -1])
+        projected_gravity = self.get_gravity_orientation(quat) * self.scales["gravity"] 
+           
         velocity_commands = command * self.scales["cmd"] 
 
         # --- 关键简化部分 ---
         # 既然顺序一致，直接切片即可 (MuJoCo qpos 偏移 7, qvel 偏移 6)
-        current_joint_pos = qpos[7:]  
-        current_joint_vel = qvel[6:]
-
+        current_joint_pos = q_is
+        current_joint_vel = dq_is
+        # print(current_joint_pos)
+        # print(self.default_joint_pos)
         # 直接计算，无需 loop 映射
         # (关节位置 - 默认位置) * 缩放
         joint_pos_rel = (current_joint_pos - self.default_joint_pos) * self.scales["joint_pos"]
         joint_vel_rel = current_joint_vel * self.scales["joint_vel"]
+        print(self.default_joint_pos)
+        print(current_joint_pos)
+        # obs_list = [
+        #     base_lin_vel,       # 3
+        #     base_ang_vel,       # 3
+        #     projected_gravity,  # 3
+        #     velocity_commands,  # 3
+        #     joint_pos_rel,      # 23
+        #     joint_vel_rel,      # 23  
+        #     action,        # 23
+        # ] # 合计: 3+3+3+3+23+23+23 = 81 维
         
-        self.action = action_net_output.copy()
+        self.obs[0:3] = base_lin_vel  # 0-2
+        self.obs[3:6] = base_ang_vel # 3-5
+        self.obs[6:9] = projected_gravity #6-8
+        self.obs[9:12] = velocity_commands #9-11
+        self.obs[12:35] = joint_pos_rel #12-34
+        self.obs[35:58] = joint_vel_rel #35-57
+        self.obs[58:81] = self.action #58-80
+        
+        obs_tensor = torch.from_numpy(self.obs).unsqueeze(0)
+        self.action = self.policy(obs_tensor).detach().numpy().squeeze()
+        action_mu = self.action[self.is_to_mu_indices]
+        self.target_joint_pos =  self.default_joint_pos + action_mu * 0.5
 
-        obs_list = [
-            base_lin_vel,       # 3
-            base_ang_vel,       # 3
-            projected_gravity,  # 3
-            velocity_commands,  # 3
-            joint_pos_rel,      # 23
-            joint_vel_rel,      # 23  
-            -self.action,        # 23
-        ] # 合计: 3+3+3+3+23+23+23 = 81 维
-
-        flat_obs = np.concatenate([x.flatten() for x in obs_list])
-        return np.clip(flat_obs, -100.0, 100.0)
-
-    def get_stacked_obs(self, current_obs_frame):
-        """将当前帧加入历史队列，并返回堆叠后的观测"""
-        self.obs_history.append(current_obs_frame)
-        # 拼接 deque 中的所有帧
-        stacked_obs = np.concatenate(list(self.obs_history))
-        return stacked_obs # 形状应该是 (1455,)
     
-    def pd_control(self,action_from_policy):
-        """执行 PD 控制 (顺序已对齐)"""
-        
-        # 1. 计算目标位置：Target = Default + Action * Action_Scale
-        # 注意：这里的 0.5 应对应你训练时的 action_scale
-        target_pos = self.default_joint_pos + action_from_policy * 0.2
-        
-        current_pos = self.data.qpos[7:]
-        current_vel = self.data.qvel[6:]
+    def pd_control(self):
+        q_mu = self.data.qpos[7:].astype(np.float32)
+        dq_mu = self.data.qvel[6:].astype(np.float32)
 
-        # 2. 计算 PD 力矩
-        # 这里的 joint_stiffness 数组顺序必须和 joint_names 一致
-        torques = self.joint_stiffness * (target_pos - current_pos) - self.joint_damping * current_vel
-        
-        # 3. 限制力矩并应用
-        torques = np.clip(torques, -80, 80)
-        
-        # 将计算好的 23 个力矩一次性赋值给 MuJoCo 控制量
-        # 假设你的 XML 中 actuator 的顺序也是按这 23 个关节排列的
-        self.data.ctrl[:] = torques
 
+        
+        self.target_joint_pos
+        # 计算 Isaac 顺序下的力矩
+        # 确保 stiffness 和 damping 也是 Isaac 顺序，或者在这里进行对应处理
+        # 建议在 __init__ 里把 stiffness 改成 Isaac 顺序
+        torques = self.joint_stiffness * (self.target_joint_pos - q_mu) - self.joint_damping * dq_mu
+
+
+        self.data.ctrl[0:9] = np.clip(torques[0:9], -40, 40)
+  
     def step(self):
 
         # 这里是物理步进的核心
@@ -268,50 +281,44 @@ class T1RobotSim:
 
 
 
-
-
-        
     def run(self):
             print("开始仿真...")
-            start = time.time()
-            simulation_duration = 60
+            counter = 0
             with mujoco.viewer.launch_passive(self.model, self.data) as viewer:
                 # 这里的 decimation (10) 应与训练配置 self.decimation * (训练步长/物理步长) 匹配
+                decimation = 25
                 
-                while viewer.is_running() and time.time() - start < simulation_duration:
+                while viewer.is_running():
                     step_start = time.time()
 
-                    # 1. 获取观测 (此时 self.action_netput 是上一帧的结果)
-                    obs_frame = self.compute_obs(self.command, self.action_netput)
-                    full_obs = self.get_stacked_obs(obs_frame)    
-                    
-                    # 2. 推理新动作
-                    with torch.no_grad():
-                        obs_tensor = torch.from_numpy(full_obs).float().unsqueeze(0).to(self.device)
-                        self.action_netput = self.policy(obs_tensor).squeeze().cpu().numpy()
-                    #self.action_netput = np.zeros(23)
-                    # 3. 物理子步循环 (Decimation)
-                    for _ in range(decimation):
-                        self.pd_control(self.action_netput) # 应用对齐后的新动作
-                        self.step() 
+                    self.pd_control()
+                    self.step()
+                    counter+=1
+                    if counter % decimation == 0:
+                        command = np.array([0,0,0], dtype=np.float32)
+                        self.compute_obs(command)
+                        # sys.stdout.write("\033[H\033[J") 
+                        # sys.stdout.flush()
+
+                        # print("========= T1 Robot Observation Monitor =========")
+                        # print(f"Time: {self.data.time:.2f}s | Counter: {counter}")
+                        # print(f"base_lin_vel: {self.obs[0:3]}")
+                        # print(f"base_ang_vel:  {self.obs[3:6]}")
+                        # print(f"projected_gravity:  {self.obs[6:9]}")
+                        # print(f"velocity_commands:  {self.obs[9:12]}")
+                        # print(f"joint_pos_rel:  {self.obs[12:35]}")
+                        # print(f"joint_vel_rel:  {self.obs[35:58]}")
+                        # print(f"action:  {self.obs[58:81]}")
+                        # print("================================================")
 
                     viewer.sync()
                 
                     # 时间补偿保持实时
-                    dt = self.model.opt.timestep * decimation
-                    time_until_next_step = dt - (time.time() - step_start)
+                    time_until_next_step = self.model.opt.timestep - (time.time() - step_start)
                     if time_until_next_step > 0:
                         time.sleep(time_until_next_step)
 
-class Observer:
-    def __init__(self, model, data):
-        self.model = model
-        self.data = data
-    
-    def compute_obs(self):
-        qpos = self.data.qpos
-        qvel = self.data.qvel
-        print(qvel)
+
 
 
 def main():
@@ -349,4 +356,4 @@ if __name__ == "__main__":
 #     # Rudimentary time keeping, will drift relative to wall clock.
 #     time_until_next_step = model.opt.timestep - (time.time() - step_start)
 #     if time_until_next_step > 0:
-#       time.sleep(time_until_next_step)
+#       time.sleep(time_until_next_step)# 假设 ground 的 geom id 是 0
