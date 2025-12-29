@@ -216,3 +216,33 @@ def foot_clearance_reward(
     foot_velocity_tanh = torch.tanh(tanh_mult * torch.norm(asset.data.body_lin_vel_w[:, asset_cfg.body_ids, :2], dim=2))
     reward = foot_z_target_error * foot_velocity_tanh
     return torch.exp(-torch.sum(reward, dim=1) / std)
+
+
+def feet_distance_l2(env: ManagerBasedRLEnv, min_dist: float, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    """针对双脚距离过近的 L2 惩罚。
+    
+    参数 min_dist 通常设置为双脚宽度之和外加 5-10cm 的安全裕度。
+    """
+    # 1. 获取机器人资源
+    asset: Articulation = env.scene[asset_cfg.name]
+    
+    # 2. 获取双脚在世界坐标系的位置 (pos_w: [num_envs, num_bodies, 3])
+    # 注意：需确保 asset_cfg.body_ids 对应 [左脚, 右脚]
+    foot_pos_w = asset.data.body_pos_w[:, asset_cfg.body_ids, :]
+    
+    # 3. 计算两脚之间的相对矢量
+    # 我们主要关注在机体系下的 Y 轴（侧向）距离，防止交叉步
+    left_foot = foot_pos_w[:, 0, :]
+    right_foot = foot_pos_w[:, 1, :]
+    
+    # 计算欧式距离（也可以只算机体系 Y 轴距离，这里推荐全距离更安全）
+    dist = torch.norm(left_foot - right_foot, dim=-1)
+    
+    # 4. 计算惩罚：如果距离小于阈值，则计算差值的平方
+    reward = torch.square(torch.clamp(min_dist - dist, min=0.0))
+    
+    # 5. 按照你的风格，结合重力投影进行掩码 (只有机器人在站立/直立状态时才惩罚)
+    # 防止机器人摔倒后在地上乱滚时产生无意义的巨大惩罚
+    reward *= torch.clamp(-env.scene["robot"].data.projected_gravity_b[:, 2], 0, 0.7) / 0.7
+    
+    return reward
