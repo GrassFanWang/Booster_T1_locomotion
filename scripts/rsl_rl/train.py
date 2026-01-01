@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """Script to train RL agent with RSL-RL."""
-
+#CUDA_VISIBLE_DEVICES=0,1,3 python -m torch.distributed.run --nnodes=1 --nproc_per_node=3 scripts/rsl_rl/train.py --headless --task=Booster-T1-Velocity --distributed --max_iterations=50000 --num_envs=8192
 """Launch Isaac Sim Simulator first."""
 
 import argparse

@@ -479,39 +479,57 @@ class RewardsCfg:
         weight=2.0,
         params={
             "command_name": "base_velocity",
-            "threshold": 0.5,
+            "threshold": 0.6,
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot_link"),
         },
     )
     
     feet_distance = RewTerm(
         func=mdp.feet_distance_l2,
-        weight=-0.5,
+        weight=-1.0,
         params={
-            "min_dist": 0.15,
-            "asset_cfg": SceneEntityCfg("robot", body_names=".*foot_link")
+            "min_dist": 0.18,
+            "asset_cfg": SceneEntityCfg("robot", body_names=".*_foot_link")
         },
     )
 
-    # alive = RewTerm(func=mdp.is_alive, weight=0.15)
-    # base_linear_velocity = RewTerm(func=mdp.lin_vel_z_l2, weight=-2.0)
-    # base_angular_velocity = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
-    # joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.001)
-    # joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
-    # action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.05)
-    # dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-5.0)
-    # energy = RewTerm(func=mdp.energy, weight=-2e-5)
     
     feet_slide = RewTerm(
         func=mdp.feet_slide,
         weight=-0.5,
         params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=".*foot_link"),
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*foot_link"),
+            "asset_cfg": SceneEntityCfg("robot", body_names=".*_foot_link"),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot_link"),
         },
     )
     
     upward = RewTerm(func=mdp.upward, weight=1.0)
+    
+
+    feet_clearance = RewTerm(
+        func=mdp.foot_clearance_reward,
+        weight=2.0,
+        params={
+            "std": 0.05,
+            "tanh_mult": 2.0,
+            "target_height": 0.15,
+            "asset_cfg": SceneEntityCfg("robot", body_names=".*foot_link"),
+        },
+    )
+    
+
+    gait = RewTerm(
+        func=mdp.feet_gait,
+        weight=2.0,
+        params={
+            "period": 0.6,      # 步态周期 (秒)，人类快走约为 0.6s-0.8s
+            "offset": [0.0, 0.5], # 左右脚相位偏移，0.5 表示完全交替
+            "threshold": 0.5,
+            "command_name": "base_velocity",
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*foot_link"),
+        },
+    )
+
 
     # joint_deviation_arms = RewTerm(
     #     func=mdp.joint_deviation_l1,
@@ -571,16 +589,7 @@ class RewardsCfg:
     #     },
     # )
 
-    # feet_clearance = RewTerm(
-    #     func=mdp.foot_clearance_reward,
-    #     weight=1.0,
-    #     params={
-    #         "std": 0.05,
-    #         "tanh_mult": 2.0,
-    #         "target_height": 0.1,
-    #         "asset_cfg": SceneEntityCfg("robot", body_names=".*foot_link"),
-    #     },
-    # )
+
 
 @configclass
 class TerminationsCfg:
